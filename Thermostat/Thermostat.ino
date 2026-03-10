@@ -112,10 +112,11 @@ void loop() {
       Serial.println(F(" C"));
       updateLCD(lastTemp);
     }
+    // Only update previous state outside the debounce window so bouncing
+    // contacts cannot create false edges while the window is active
+    lastBtnUp   = curBtnUp;
+    lastBtnDown = curBtnDown;
   }
-
-  lastBtnUp   = curBtnUp;
-  lastBtnDown = curBtnDown;
   // ───────────────────────────────────────────────────────────────────────────
 
   // Request a new conversion every READ_INTERVAL ms
