@@ -4,14 +4,20 @@
 #include <avr/wdt.h>
 
 // ── Configuration ─────────────────────────────────────────────────────────────
-#define ONE_WIRE_BUS  2       // DS18B20 data pin
-#define RELAY_PIN     4       // Relay signal pin
-#define SETPOINT_C    24.0    // Target temperature in °C
-#define HYSTERESIS    1.0     // ±°C band around setpoint
-#define MAX_SAFE_TEMP 30.0    // hard safety cutoff — relay forced off above this
-#define READ_INTERVAL 1000UL  // ms between temperature reads
-#define CONVERSION_MS 750UL   // DS18B20 conversion time at 12-bit resolution
-#define LCD_ADDRESS   0x27    // I2C address; try 0x3F if display doesn't respond
+#define ONE_WIRE_BUS     2       // DS18B20 data pin
+#define RELAY_PIN        4       // Relay signal pin
+#define SETPOINT_DEFAULT 24.0   // Initial setpoint in °C
+#define SETPOINT_STEP    0.5    // °C per button press
+#define SETPOINT_MIN     5.0    // Lowest permitted setpoint in °C
+#define SETPOINT_MAX     29.0   // Highest permitted setpoint (below MAX_SAFE_TEMP)
+#define BTN_UP           5      // Up button pin (button to GND, INPUT_PULLUP)
+#define BTN_DOWN         6      // Down button pin (button to GND, INPUT_PULLUP)
+#define BTN_DEBOUNCE_MS  50UL   // Debounce window in ms
+#define HYSTERESIS       1.0    // ±°C band around setpoint
+#define MAX_SAFE_TEMP    30.0   // Hard safety cutoff — relay forced off above this
+#define READ_INTERVAL    1000UL // ms between temperature reads
+#define CONVERSION_MS    750UL  // DS18B20 conversion time at 12-bit resolution
+#define LCD_ADDRESS      0x27   // I2C address; try 0x3F if display doesn't respond
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Active-HIGH relay: HIGH = coil energized (heating ON), LOW = coil released
@@ -22,11 +28,16 @@ OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
 LiquidCrystal_I2C lcd(LCD_ADDRESS, 16, 2);
 
-bool sensorOk    = false;  // set true after first valid reading
-bool sensorError = false;  // true when most recent read was invalid
-bool conversionRequested = false;
-uint32_t lastRequest = 0;
-bool relayOn = false;
+bool     sensorOk            = false;  // set true after first valid reading
+bool     sensorError         = false;  // true when most recent read was invalid
+bool     conversionRequested = false;
+uint32_t lastRequest         = 0;
+bool     relayOn             = false;
+float    setpointC           = SETPOINT_DEFAULT;  // runtime-adjustable setpoint
+float    lastTemp            = 0.0;               // most recent valid temperature
+uint32_t lastBtnTime         = 0;                 // debounce timestamp
+bool     btnUpArmed          = true;              // ready to accept next UP press
+bool     btnDownArmed        = true;              // ready to accept next DOWN press
 
 void updateLCD(float tempC) {
   char buf[8];
@@ -47,13 +58,13 @@ void updateLCD(float tempC) {
   }
 
   // Line 1: setpoint + relay state, or cutoff warning
-  // "Set: " (5) + buf (4) + °C (2) + "  " (2) + relay (3) = 16 chars
+  // "Set :" (5) + buf (5) + °C (2) + " " (1) + relay (3) = 16 chars
   // "CUTOFF" (6) + spaces (7 or 8) + relay (3) = 16 chars
   lcd.setCursor(0, 1);
   if (!sensorError && tempC >= MAX_SAFE_TEMP) {
     lcd.print(relayOn ? F("CUTOFF        ON") : F("CUTOFF       OFF"));
   } else {
-    dtostrf(SETPOINT_C, 5, 1, buf);
+    dtostrf(setpointC, 5, 1, buf);
     lcd.print(F("Set :"));
     lcd.print(buf);
     lcd.print((char)0xDF);  // degree symbol
@@ -68,6 +79,8 @@ void setup() {
   sensors.setWaitForConversion(false); // async: don't block during conversion
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, RELAY_OFF); // start with relay off
+  pinMode(BTN_UP,   INPUT_PULLUP);
+  pinMode(BTN_DOWN, INPUT_PULLUP);
   lcd.init();
   lcd.backlight();
   updateLCD(0.0);                     // show initial state before first read
@@ -78,6 +91,43 @@ void loop() {
   wdt_reset();
 
   uint32_t now = millis();
+
+  // ── Button polling (armed + debounced press and release) ───────────────────
+  if (now - lastBtnTime >= BTN_DEBOUNCE_MS) {
+    bool curBtnUp   = digitalRead(BTN_UP);
+    bool curBtnDown = digitalRead(BTN_DOWN);
+
+    // Re-arm when button is fully released; restart debounce so release
+    // bounce cannot immediately trigger a new press
+    if (curBtnUp == HIGH && !btnUpArmed) {
+      btnUpArmed  = true;
+      lastBtnTime = now;
+    }
+    if (curBtnDown == HIGH && !btnDownArmed) {
+      btnDownArmed = true;
+      lastBtnTime  = now;
+    }
+
+    // Fire once per press while armed
+    if (curBtnUp == LOW && btnUpArmed) {
+      btnUpArmed  = false;
+      lastBtnTime = now;
+      setpointC   = min(setpointC + SETPOINT_STEP, (float)SETPOINT_MAX);
+      Serial.print(F("Setpoint: "));
+      Serial.print(setpointC, 1);
+      Serial.println(F(" C"));
+      updateLCD(lastTemp);
+    } else if (curBtnDown == LOW && btnDownArmed) {
+      btnDownArmed = false;
+      lastBtnTime  = now;
+      setpointC    = max(setpointC - SETPOINT_STEP, (float)SETPOINT_MIN);
+      Serial.print(F("Setpoint: "));
+      Serial.print(setpointC, 1);
+      Serial.println(F(" C"));
+      updateLCD(lastTemp);
+    }
+  }
+  // ───────────────────────────────────────────────────────────────────────────
 
   // Request a new conversion every READ_INTERVAL ms
   if (!conversionRequested && now - lastRequest >= READ_INTERVAL) {
@@ -106,8 +156,9 @@ void loop() {
     return;
   }
 
-  sensorOk = true;
+  sensorOk  = true;
   sensorError = false;
+  lastTemp  = tempC;  // store for immediate LCD refresh on button press
 
   if (tempC >= MAX_SAFE_TEMP) {
     relayOn = false;
@@ -122,9 +173,9 @@ void loop() {
   Serial.println(F(" C"));
 
   bool desired;
-  if (tempC < SETPOINT_C - HYSTERESIS) {
+  if (tempC < setpointC - HYSTERESIS) {
     desired = true;
-  } else if (tempC > SETPOINT_C + HYSTERESIS) {
+  } else if (tempC > setpointC + HYSTERESIS) {
     desired = false;
   } else {
     desired = relayOn;  // within hysteresis band: maintain current state
