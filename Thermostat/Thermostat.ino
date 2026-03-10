@@ -36,8 +36,8 @@ bool     relayOn             = false;
 float    setpointC           = SETPOINT_DEFAULT;  // runtime-adjustable setpoint
 float    lastTemp            = 0.0;               // most recent valid temperature
 uint32_t lastBtnTime         = 0;                 // debounce timestamp
-bool     lastBtnUp           = HIGH;              // previous UP button state
-bool     lastBtnDown         = HIGH;              // previous DOWN button state
+bool     btnUpArmed          = true;              // ready to accept next UP press
+bool     btnDownArmed        = true;              // ready to accept next DOWN press
 
 void updateLCD(float tempC) {
   char buf[8];
@@ -92,30 +92,40 @@ void loop() {
 
   uint32_t now = millis();
 
-  // ── Button polling (edge-detected + debounced) ─────────────────────────────
-  bool curBtnUp   = digitalRead(BTN_UP);
-  bool curBtnDown = digitalRead(BTN_DOWN);
-
+  // ── Button polling (armed + debounced press and release) ───────────────────
   if (now - lastBtnTime >= BTN_DEBOUNCE_MS) {
-    if (curBtnUp == LOW && lastBtnUp == HIGH) {        // fresh press on UP
-      setpointC = min(setpointC + SETPOINT_STEP, (float)SETPOINT_MAX);
+    bool curBtnUp   = digitalRead(BTN_UP);
+    bool curBtnDown = digitalRead(BTN_DOWN);
+
+    // Re-arm when button is fully released; restart debounce so release
+    // bounce cannot immediately trigger a new press
+    if (curBtnUp == HIGH && !btnUpArmed) {
+      btnUpArmed  = true;
       lastBtnTime = now;
+    }
+    if (curBtnDown == HIGH && !btnDownArmed) {
+      btnDownArmed = true;
+      lastBtnTime  = now;
+    }
+
+    // Fire once per press while armed
+    if (curBtnUp == LOW && btnUpArmed) {
+      btnUpArmed  = false;
+      lastBtnTime = now;
+      setpointC   = min(setpointC + SETPOINT_STEP, (float)SETPOINT_MAX);
       Serial.print(F("Setpoint: "));
       Serial.print(setpointC, 1);
       Serial.println(F(" C"));
       updateLCD(lastTemp);
-    } else if (curBtnDown == LOW && lastBtnDown == HIGH) {  // fresh press on DOWN
-      setpointC = max(setpointC - SETPOINT_STEP, (float)SETPOINT_MIN);
-      lastBtnTime = now;
+    } else if (curBtnDown == LOW && btnDownArmed) {
+      btnDownArmed = false;
+      lastBtnTime  = now;
+      setpointC    = max(setpointC - SETPOINT_STEP, (float)SETPOINT_MIN);
       Serial.print(F("Setpoint: "));
       Serial.print(setpointC, 1);
       Serial.println(F(" C"));
       updateLCD(lastTemp);
     }
-    // Only update previous state outside the debounce window so bouncing
-    // contacts cannot create false edges while the window is active
-    lastBtnUp   = curBtnUp;
-    lastBtnDown = curBtnDown;
   }
   // ───────────────────────────────────────────────────────────────────────────
 
