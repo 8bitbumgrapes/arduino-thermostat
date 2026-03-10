@@ -1,5 +1,6 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <LiquidCrystal_I2C.h>
 #include <avr/wdt.h>
 
 // ── Configuration ─────────────────────────────────────────────────────────────
@@ -10,6 +11,7 @@
 #define MAX_SAFE_TEMP 30.0    // hard safety cutoff — relay forced off above this
 #define READ_INTERVAL 1000UL  // ms between temperature reads
 #define CONVERSION_MS 750UL   // DS18B20 conversion time at 12-bit resolution
+#define LCD_ADDRESS   0x27    // I2C address; try 0x3F if display doesn't respond
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Active-HIGH relay: HIGH = coil energized (heating ON), LOW = coil released
@@ -18,11 +20,47 @@
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
+LiquidCrystal_I2C lcd(LCD_ADDRESS, 16, 2);
 
-bool sensorOk = false;            // set true after first valid reading
-bool conversionRequested = false; // tracks async conversion state
-uint32_t lastRequest = 0;         // millis() timestamp of last conversion request
-bool relayOn = false;             // tracks current relay state
+bool sensorOk    = false;  // set true after first valid reading
+bool sensorError = false;  // true when most recent read was invalid
+bool conversionRequested = false;
+uint32_t lastRequest = 0;
+bool relayOn = false;
+
+void updateLCD(float tempC) {
+  char buf[8];
+  // 3-char relay strings, right-aligned at columns 13-15 of line 1
+  const char* relayStr = relayOn ? " ON" : "OFF";
+
+  // Line 0: temperature or sensor error message
+  // "Temp:" (5) + buf (5) + °C (2) + "    " (4) = 16 chars
+  lcd.setCursor(0, 0);
+  if (sensorError) {
+    lcd.print(sensorOk ? F("Sensor Lost!    ") : F("No Sensor!      "));
+  } else {
+    dtostrf(tempC, 5, 1, buf);
+    lcd.print(F("Temp:"));
+    lcd.print(buf);
+    lcd.print((char)0xDF);  // degree symbol
+    lcd.print(F("C    "));
+  }
+
+  // Line 1: setpoint + relay state, or cutoff warning
+  // "Set: " (5) + buf (4) + °C (2) + "  " (2) + relay (3) = 16 chars
+  // "CUTOFF" (6) + spaces (7 or 8) + relay (3) = 16 chars
+  lcd.setCursor(0, 1);
+  if (!sensorError && tempC >= MAX_SAFE_TEMP) {
+    lcd.print(relayOn ? F("CUTOFF        ON") : F("CUTOFF       OFF"));
+  } else {
+    dtostrf(SETPOINT_C, 5, 1, buf);
+    lcd.print(F("Set :"));
+    lcd.print(buf);
+    lcd.print((char)0xDF);  // degree symbol
+    lcd.print(F("C "));
+    lcd.print(relayStr);
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -30,6 +68,9 @@ void setup() {
   sensors.setWaitForConversion(false); // async: don't block during conversion
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, RELAY_OFF); // start with relay off
+  lcd.init();
+  lcd.backlight();
+  updateLCD(0.0);                     // show initial state before first read
   wdt_enable(WDTO_4S);               // reset MCU if loop stalls for 4 seconds
 }
 
@@ -53,6 +94,7 @@ void loop() {
 
   if (tempC < -55.0 || tempC > 125.0) {
     relayOn = false;
+    sensorError = true;
     digitalWrite(RELAY_PIN, RELAY_OFF);  // fail-safe: cut heat
     if (sensorOk) {
       Serial.println(F("ERROR: sensor disconnected - relay forced OFF"));
@@ -60,15 +102,18 @@ void loop() {
       Serial.println(F("ERROR: no sensor detected - retrying scan"));
       sensors.begin();  // re-scan bus in case sensor was just connected
     }
+    updateLCD(0.0);
     return;
   }
 
   sensorOk = true;
+  sensorError = false;
 
   if (tempC >= MAX_SAFE_TEMP) {
     relayOn = false;
     digitalWrite(RELAY_PIN, RELAY_OFF);
     Serial.println(F("SAFETY CUTOFF: max temperature exceeded - relay forced OFF"));
+    updateLCD(tempC);
     return;
   }
 
@@ -91,4 +136,6 @@ void loop() {
     Serial.print(F("Relay "));
     Serial.println(relayOn ? F("ON") : F("OFF"));
   }
+
+  updateLCD(tempC);
 }
