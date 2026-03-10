@@ -1,6 +1,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <LiquidCrystal_I2C.h>
+#include <EEPROM.h>
 #include <avr/wdt.h>
 
 // ── Configuration ─────────────────────────────────────────────────────────────
@@ -18,6 +19,7 @@
 #define READ_INTERVAL    1000UL // ms between temperature reads
 #define CONVERSION_MS    750UL  // DS18B20 conversion time at 12-bit resolution
 #define LCD_ADDRESS      0x27   // I2C address; try 0x3F if display doesn't respond
+#define EEPROM_ADDR      0      // EEPROM address for persisted setpoint (uses 4 bytes)
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Active-HIGH relay: HIGH = coil energized (heating ON), LOW = coil released
@@ -38,6 +40,12 @@ float    lastTemp            = 0.0;               // most recent valid temperatu
 uint32_t lastBtnTime         = 0;                 // debounce timestamp
 bool     btnUpArmed          = true;              // ready to accept next UP press
 bool     btnDownArmed        = true;              // ready to accept next DOWN press
+
+// Keeps relayOn state variable and hardware pin always in sync
+void setRelay(bool on) {
+  relayOn = on;
+  digitalWrite(RELAY_PIN, on ? RELAY_ON : RELAY_OFF);
+}
 
 void updateLCD(float tempC) {
   char buf[8];
@@ -78,9 +86,22 @@ void setup() {
   sensors.begin();
   sensors.setWaitForConversion(false); // async: don't block during conversion
   pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, RELAY_OFF); // start with relay off
+  setRelay(false);                     // start with relay off
   pinMode(BTN_UP,   INPUT_PULLUP);
   pinMode(BTN_DOWN, INPUT_PULLUP);
+
+  // Load persisted setpoint from EEPROM; fall back to default if out of range
+  float saved;
+  EEPROM.get(EEPROM_ADDR, saved);
+  if (saved >= SETPOINT_MIN && saved <= SETPOINT_MAX) {
+    setpointC = saved;
+    Serial.print(F("Setpoint loaded from EEPROM: "));
+    Serial.print(setpointC, 1);
+    Serial.println(F(" C"));
+  } else {
+    Serial.println(F("EEPROM setpoint invalid — using default"));
+  }
+
   lcd.init();
   lcd.backlight();
   updateLCD(0.0);                     // show initial state before first read
@@ -113,6 +134,7 @@ void loop() {
       btnUpArmed  = false;
       lastBtnTime = now;
       setpointC   = min(setpointC + SETPOINT_STEP, (float)SETPOINT_MAX);
+      EEPROM.put(EEPROM_ADDR, setpointC);
       Serial.print(F("Setpoint: "));
       Serial.print(setpointC, 1);
       Serial.println(F(" C"));
@@ -121,6 +143,7 @@ void loop() {
       btnDownArmed = false;
       lastBtnTime  = now;
       setpointC    = max(setpointC - SETPOINT_STEP, (float)SETPOINT_MIN);
+      EEPROM.put(EEPROM_ADDR, setpointC);
       Serial.print(F("Setpoint: "));
       Serial.print(setpointC, 1);
       Serial.println(F(" C"));
@@ -143,9 +166,8 @@ void loop() {
   float tempC = sensors.getTempCByIndex(0);
 
   if (tempC < -55.0 || tempC > 125.0) {
-    relayOn = false;
     sensorError = true;
-    digitalWrite(RELAY_PIN, RELAY_OFF);  // fail-safe: cut heat
+    setRelay(false);  // fail-safe: cut heat
     if (sensorOk) {
       Serial.println(F("ERROR: sensor disconnected - relay forced OFF"));
     } else {
@@ -156,13 +178,12 @@ void loop() {
     return;
   }
 
-  sensorOk  = true;
+  sensorOk    = true;
   sensorError = false;
-  lastTemp  = tempC;  // store for immediate LCD refresh on button press
+  lastTemp    = tempC;  // store for immediate LCD refresh on button press
 
   if (tempC >= MAX_SAFE_TEMP) {
-    relayOn = false;
-    digitalWrite(RELAY_PIN, RELAY_OFF);
+    setRelay(false);
     Serial.println(F("SAFETY CUTOFF: max temperature exceeded - relay forced OFF"));
     updateLCD(tempC);
     return;
@@ -182,8 +203,7 @@ void loop() {
   }
 
   if (desired != relayOn) {
-    relayOn = desired;
-    digitalWrite(RELAY_PIN, relayOn ? RELAY_ON : RELAY_OFF);
+    setRelay(desired);
     Serial.print(F("Relay "));
     Serial.println(relayOn ? F("ON") : F("OFF"));
   }
