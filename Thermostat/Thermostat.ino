@@ -36,6 +36,8 @@ bool     relayOn             = false;
 float    setpointC           = SETPOINT_DEFAULT;  // runtime-adjustable setpoint
 float    lastTemp            = 0.0;               // most recent valid temperature
 uint32_t lastBtnTime         = 0;                 // debounce timestamp
+bool     lastBtnUp           = HIGH;              // previous UP button state
+bool     lastBtnDown         = HIGH;              // previous DOWN button state
 
 void updateLCD(float tempC) {
   char buf[8];
@@ -90,16 +92,19 @@ void loop() {
 
   uint32_t now = millis();
 
-  // ── Button polling (debounced) ──────────────────────────────────────────────
+  // ── Button polling (edge-detected + debounced) ─────────────────────────────
+  bool curBtnUp   = digitalRead(BTN_UP);
+  bool curBtnDown = digitalRead(BTN_DOWN);
+
   if (now - lastBtnTime >= BTN_DEBOUNCE_MS) {
-    if (digitalRead(BTN_UP) == LOW) {
+    if (curBtnUp == LOW && lastBtnUp == HIGH) {        // fresh press on UP
       setpointC = min(setpointC + SETPOINT_STEP, (float)SETPOINT_MAX);
       lastBtnTime = now;
       Serial.print(F("Setpoint: "));
       Serial.print(setpointC, 1);
       Serial.println(F(" C"));
       updateLCD(lastTemp);
-    } else if (digitalRead(BTN_DOWN) == LOW) {
+    } else if (curBtnDown == LOW && lastBtnDown == HIGH) {  // fresh press on DOWN
       setpointC = max(setpointC - SETPOINT_STEP, (float)SETPOINT_MIN);
       lastBtnTime = now;
       Serial.print(F("Setpoint: "));
@@ -108,6 +113,9 @@ void loop() {
       updateLCD(lastTemp);
     }
   }
+
+  lastBtnUp   = curBtnUp;
+  lastBtnDown = curBtnDown;
   // ───────────────────────────────────────────────────────────────────────────
 
   // Request a new conversion every READ_INTERVAL ms
