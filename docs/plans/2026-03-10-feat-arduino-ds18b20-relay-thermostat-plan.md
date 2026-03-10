@@ -56,13 +56,13 @@ At 12-bit resolution (default) the sensor needs ~750 ms to complete a conversion
 
 ## Acceptance Criteria
 
-- [ ] Sketch compiles without errors for Arduino Uno/Nano (AVR target)
-- [ ] Relay energizes when temperature is below `SETPOINT_C - HYSTERESIS`
-- [ ] Relay de-energizes when temperature is above `SETPOINT_C + HYSTERESIS`
-- [ ] Relay state does not change when temperature is within the hysteresis band
-- [ ] Serial monitor prints current temperature every loop iteration
-- [ ] Disconnected/faulty sensor prints an error message and does not change relay state
-- [ ] Setpoint and hysteresis are easy to find and change (top-of-file `#define`)
+- [x] Sketch compiles without errors for Arduino Uno/Nano (AVR target)
+- [x] Relay energizes when temperature is below `SETPOINT_C - HYSTERESIS`
+- [x] Relay de-energizes when temperature is above `SETPOINT_C + HYSTERESIS`
+- [x] Relay state does not change when temperature is within the hysteresis band
+- [x] Serial monitor prints current temperature every loop iteration
+- [x] Disconnected/faulty sensor prints an error message and does not change relay state
+- [x] Setpoint and hysteresis are easy to find and change (top-of-file `#define`)
 
 ## Dependencies & Risks
 
