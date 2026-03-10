@@ -53,11 +53,11 @@ void updateLCD(float tempC) {
   if (!sensorError && tempC >= MAX_SAFE_TEMP) {
     lcd.print(relayOn ? F("CUTOFF        ON") : F("CUTOFF       OFF"));
   } else {
-    dtostrf(SETPOINT_C, 4, 1, buf);
-    lcd.print(F("Set: "));
+    dtostrf(SETPOINT_C, 5, 1, buf);
+    lcd.print(F("Set :"));
     lcd.print(buf);
     lcd.print((char)0xDF);  // degree symbol
-    lcd.print(F("C  "));
+    lcd.print(F("C "));
     lcd.print(relayStr);
   }
 }
